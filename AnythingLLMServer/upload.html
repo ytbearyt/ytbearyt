@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnythingLLM 文档工作台</title>
+<style>
+:root { --ink:#18232b; --muted:#6c7a80; --line:#dce5e4; --paper:#f6f8f5; --card:#fff; --accent:#0c7c72; --accent-dark:#095c55; --danger:#b33b31; --shadow:0 18px 50px #18312b12; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:radial-gradient(circle at 85% 0%, #dceee9 0, transparent 35%), var(--paper); font:15px/1.5 "Microsoft YaHei", "PingFang SC", sans-serif; }
+.shell { max-width:1080px; margin:0 auto; padding:44px 24px 60px; }
+header { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-bottom:28px; }
+h1 { margin:4px 0 0; font-family:Georgia, serif; font-size:clamp(30px, 5vw, 46px); letter-spacing:0; }
+.eyebrow { margin:0; color:var(--accent); font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; }
+.connection { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+.dot { width:9px; height:9px; border-radius:50%; background:#d6a431; }
+.dot.ready { background:#22a777; } .dot.error { background:var(--danger); }
+.layout { display:grid; grid-template-columns:minmax(0, 1.35fr) minmax(280px, .65fr); gap:22px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:24px; }
+.card h2 { margin:0 0 5px; font-size:19px; } .hint { margin:0 0 20px; color:var(--muted); }
+.dropzone { border:1.5px dashed #9fc2bb; border-radius:7px; padding:34px 20px; text-align:center; background:#f5fbf9; transition:.2s ease; }
+.dropzone.over { border-color:var(--accent); background:#e8f6f2; transform:translateY(-1px); }
+.dropzone strong { display:block; margin-bottom:5px; font-size:17px; }
+.dropzone small { color:var(--muted); }
+input[type=file] { display:none; }
+.browse { display:inline-flex; margin-top:17px; padding:10px 17px; border:0; border-radius:5px; color:white; background:var(--accent); cursor:pointer; font-weight:700; }
+.browse:hover, .primary:hover { background:var(--accent-dark); }
+.settings { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:18px; }
+label { display:block; color:var(--muted); font-size:13px; font-weight:700; }
+select, input[type=text], input[type=password] { width:100%; margin-top:6px; padding:10px 11px; border:1px solid var(--line); border-radius:5px; color:var(--ink); background:white; font:inherit; }
+.queue { margin-top:20px; } .queue:empty { display:none; }
+.file-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
+.file-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-size, .status { color:var(--muted); font-size:12px; white-space:nowrap; }
+.status.success { color:#148161; } .status.failed { color:var(--danger); }
+.remove { border:0; background:none; color:var(--muted); cursor:pointer; font-size:18px; }
+.actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+button { font:inherit; } .secondary, .primary { padding:10px 16px; border-radius:5px; cursor:pointer; font-weight:700; }
+.secondary { border:1px solid var(--line); background:white; color:var(--ink); } .primary { border:0; background:var(--accent); color:white; }
+button:disabled { cursor:not-allowed; opacity:.5; }
+.side { display:flex; flex-direction:column; gap:22px; } .metric { display:flex; justify-content:space-between; padding:12px 0; border-top:1px solid var(--line); }
+.metric:first-of-type { margin-top:16px; } .metric span { color:var(--muted); }
+.history { max-height:260px; overflow:auto; } .history-item { padding:10px 0; border-top:1px solid var(--line); } .history-item small { color:var(--muted); display:block; }
+.notice { min-height:22px; margin:16px 0 0; color:var(--muted); } .notice.error { color:var(--danger); } .notice.success { color:#148161; }
+@media (max-width:760px) { .shell { padding:28px 16px 40px; } header { align-items:flex-start; flex-direction:column; } .layout { grid-template-columns:1fr; } .settings { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div><p class="eyebrow">AnythingLLM · Document Desk</p><h1>文档工作台</h1></div>
+    <div class="connection"><i class="dot" id="connectionDot"></i><span id="connectionText">正在连接服务...</span></div>
+  </header>
+  <div class="layout">
+    <section class="card">
+      <h2>导入资料</h2><p class="hint">将文件加入工作区，随后即可在 AnythingLLM 中检索和对话。</p>
+      <div class="dropzone" id="dropzone"><strong>拖放文件到这里</strong><small>支持批量选择，单个文件最大 50 MB</small><br><label class="browse" for="fileInput">选择文件</label><input id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.doc,.docx,.csv,.json,.html,.xlsx,.xls"></div>
+      <div class="settings"><label>目标工作区<select id="workspaceSelect"><option value="">加载中...</option></select></label><label>服务地址<input id="apiInput" type="text" value="http://localhost:3001/api"></label><label>API 密钥<input id="keyInput" type="password" placeholder="输入 Bearer Token（不会写入文件）"></label></div>
+      <div class="queue" id="queue"></div><p class="notice" id="notice" role="status"></p>
+      <div class="actions"><button class="secondary" id="clearButton" type="button">清空列表</button><button class="primary" id="uploadButton" type="button" disabled>开始上传</button></div>
+    </section>
+    <aside class="side">
+      <section class="card"><h2>连接状态</h2><p class="hint">当前服务概览</p><div class="metric"><span>工作区数量</span><strong id="workspaceCount">-</strong></div><div class="metric"><span>待上传文件</span><strong id="pendingCount">0</strong></div><div class="metric"><span>已完成任务</span><strong id="successCount">0</strong></div></section>
+      <section class="card"><h2>最近活动</h2><p class="hint">本浏览器保存的上传记录</p><div class="history" id="history"><span class="file-size">暂无记录</span></div></section>
+    </aside>
+  </div>
+</main>
+<script>
+const state = { files: [], workspaces: [], uploading: false };
+const $ = id => document.getElementById(id);
+const formatSize = bytes => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const apiUrl = path => `${$('apiInput').value.replace(/\/$/, '')}${path}`;
+function authHeaders() { const key = $('keyInput').value.trim(); return key ? { Authorization: `Bearer ${key}` } : {}; }
+function message(text, type = '') { $('notice').textContent = text; $('notice').className = `notice ${type}`; }
+function renderQueue() { $('queue').innerHTML = state.files.map((item, index) => `<div class="file-row"><span class="file-name" title="${item.file.name}">${item.file.name}</span><span class="file-size">${formatSize(item.file.size)}</span><span class="status ${item.status}">${item.status === 'success' ? '已完成' : item.status === 'failed' ? '失败' : item.status === 'uploading' ? '上传中' : '待上传'}</span><button class="remove" type="button" data-index="${index}" aria-label="移除 ${item.file.name}">&times;</button></div>`).join(''); $('pendingCount').textContent = state.files.filter(item => item.status === 'pending').length; $('uploadButton').disabled = state.uploading || !state.files.some(item => item.status === 'pending') || !$('workspaceSelect').value; }
+function addFiles(files) { const accepted = [...files].filter(file => file.size <= 50 * 1024 * 1024); state.files.push(...accepted.map(file => ({ file, status: 'pending' }))); if (accepted.length !== files.length) message('已跳过超过 50 MB 的文件', 'error'); renderQueue(); }
+async function loadWorkspaces() { try { const response = await fetch(apiUrl('/v1/workspaces'), { headers: authHeaders() }); if (!response.ok) throw new Error(`服务返回 ${response.status}`); const data = await response.json(); state.workspaces = data.workspaces || []; $('workspaceSelect').innerHTML = state.workspaces.length ? state.workspaces.map(workspace => `<option value="${workspace.slug}">${workspace.name}</option>`).join('') : '<option value="">没有可用工作区</option>'; $('workspaceCount').textContent = state.workspaces.length; $('connectionDot').className = 'dot ready'; $('connectionText').textContent = '服务已连接'; renderQueue(); } catch (error) { $('connectionDot').className = 'dot error'; $('connectionText').textContent = '连接失败'; $('workspaceSelect').innerHTML = '<option value="">无法加载工作区</option>'; message(`无法连接服务：${error.message}`, 'error'); } }
+async function upload() { const workspace = $('workspaceSelect').value; const pending = state.files.filter(item => item.status === 'pending'); if (!workspace || !pending.length) return; state.uploading = true; renderQueue(); let completed = 0; for (const item of pending) { item.status = 'uploading'; renderQueue(); const form = new FormData(); form.append('file', item.file); form.append('addToWorkspaces', workspace); try { const response = await fetch(apiUrl('/v1/document/upload'), { method: 'POST', headers: authHeaders(), body: form }); if (!response.ok) throw new Error(`服务返回 ${response.status}`); item.status = 'success'; completed++; addHistory(item.file.name); } catch (error) { item.status = 'failed'; message(`${item.file.name} 上传失败：${error.message}`, 'error'); } renderQueue(); } state.uploading = false; $('successCount').textContent = Number($('successCount').textContent) + completed; if (completed) message(`已成功上传 ${completed} 个文件`, 'success'); renderQueue(); }
+function addHistory(name) { const history = JSON.parse(localStorage.getItem('anythingllm-upload-history') || '[]'); history.unshift({ name, time: new Date().toLocaleString('zh-CN') }); localStorage.setItem('anythingllm-upload-history', JSON.stringify(history.slice(0, 12))); renderHistory(); }
+function renderHistory() { const history = JSON.parse(localStorage.getItem('anythingllm-upload-history') || '[]'); $('history').innerHTML = history.length ? history.map(item => `<div class="history-item"><strong>${item.name}</strong><small>${item.time}</small></div>`).join('') : '<span class="file-size">暂无记录</span>'; }
+$('fileInput').addEventListener('change', event => addFiles(event.target.files)); $('dropzone').addEventListener('dragover', event => { event.preventDefault(); $('dropzone').classList.add('over'); }); $('dropzone').addEventListener('dragleave', () => $('dropzone').classList.remove('over')); $('dropzone').addEventListener('drop', event => { event.preventDefault(); $('dropzone').classList.remove('over'); addFiles(event.dataTransfer.files); }); $('queue').addEventListener('click', event => { const button = event.target.closest('.remove'); if (button && !state.uploading) { state.files.splice(Number(button.dataset.index), 1); renderQueue(); } }); $('uploadButton').addEventListener('click', upload); $('clearButton').addEventListener('click', () => { if (!state.uploading) { state.files.length = 0; message('列表已清空'); renderQueue(); } }); $('apiInput').addEventListener('change', loadWorkspaces); $('keyInput').addEventListener('change', loadWorkspaces); renderHistory(); loadWorkspaces();
+</script>
+</body>
+</html>
