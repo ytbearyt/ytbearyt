@@ -1,0 +1,4 @@
+mcp[cli]>=2.0.0b1
+httpx>=0.27.0
+uvicorn>=0.30.0
+starlette>=0.37.0
