@@ -1,0 +1,107 @@
+---
+title: chat3.py 代码架构图
+---
+flowchart TD
+
+    subgraph S1["初始化"]
+        direction TB
+        I1["读取 config.ini<br/>base_url / api_key / model"]
+        I2["创建 OpenAI 客户端 client"]
+        I3["fn 构造 function schema<br/>tools 定义列表（11 个工具）"]
+        I1 --> I2
+        I1 --> I3
+    end
+
+    subgraph S2["主循环 __main__"]
+        direction TB
+        M1["input 获取用户 prompt<br/>EOF / Ctrl+C 则退出程序"]
+        M2["history 追加 user 消息"]
+        M3["调用 stream_chat(history)"]
+        M4{"返回的 tool_calls 是否为空"}
+        M5["history 追加 assistant 消息"]
+        M6["逐个解析 tool_calls<br/>json.loads 得到参数并打印日志"]
+        M7["调用 execute_tool(name, arguments)"]
+        M8["history 追加 role=tool 结果消息<br/>携带 tool_call_id"]
+        M9["本轮对话结束<br/>等待下一次输入"]
+        M1 --> M2 --> M3 --> M4
+        M4 -->|"为空"| M9
+        M9 --> M1
+        M4 -->|"不为空"| M5 --> M6 --> M7 --> M8
+        M8 --> M3
+    end
+
+    subgraph S3["stream_chat 流式请求"]
+        direction TB
+        C1["client.chat.completions.create<br/>stream=True 并携带 tools"]
+        C2["遍历 chunk 累积 content<br/>实时打印回复文本"]
+        C3["按 index 累积 tool_calls<br/>拼接 id / name / arguments 片段"]
+        C4["返回 reply 与按序号排序的 tool_calls"]
+        C1 --> C2 --> C4
+        C1 --> C3 --> C4
+    end
+
+    subgraph S4["execute_tool 调度"]
+        direction TB
+        E1{"handlers 字典中是否存在该工具"}
+        E2["返回：未知的工具"]
+        E3["try 执行 handler(arguments)"]
+        E4["except 捕获异常<br/>返回 错误：异常类型: 信息"]
+        E1 -->|"否"| E2
+        E1 -->|"是"| E3
+        E3 -->|"抛出异常"| E4
+    end
+
+    subgraph S5["工具实现（handlers 注册）"]
+        direction TB
+        X["按工具名分发"]
+        subgraph S5A["本地命令"]
+            T1["getDate<br/>subprocess 调用 date / time 命令"]
+        end
+        subgraph S5B["查询类"]
+            T2["getCurrentDir<br/>os.getcwd"]
+            T3["listDir<br/>os.scandir 列出文件与子目录"]
+            T4["getFileType<br/>mimetypes + 扩展名表 + 文本探测"]
+            T5["readFile<br/>读取纯文本，超 20000 字截断"]
+        end
+        subgraph S5C["文件与目录写入类"]
+            T6["createFile<br/>按目录+文件名创建，UTF-8 写入"]
+            T7["editFile<br/>overwrite 覆盖 / append 追加"]
+            T8["createDir<br/>os.makedirs 创建多级目录"]
+            T9["removeDir<br/>shutil.rmtree 删除非空目录<br/>保护根目录与当前工作目录"]
+            T10["removeFile<br/>os.remove 删除文件"]
+            T11["rename<br/>os.rename 重命名文件或目录"]
+        end
+        subgraph S5D["公共辅助"]
+            H1["_detect_encoding<br/>utf-8 / cp936 / gbk 依次探测"]
+            H2["_read_bytes<br/>读取上限 2MB 并防截断"]
+            H3["EXT_TYPES 扩展名类型表<br/>MAX_READ_CHARS / MAX_READ_BYTES 常量"]
+        end
+        X --> T1
+        X --> T2
+        X --> T3
+        X --> T4
+        X --> T5
+        X --> T6
+        X --> T7
+        X --> T8
+        X --> T9
+        X --> T10
+        X --> T11
+        T4 -.-> H1
+        T4 -.-> H2
+        T4 -.-> H3
+        T5 -.-> H1
+        T5 -.-> H2
+        T7 -.-> H1
+        T7 -.-> H2
+        T3 -.-> H2
+        T6 -.-> H1
+    end
+
+    I2 --> M1
+    I3 --> C1
+    M3 --> C1
+    C4 --> M4
+    M7 --> E1
+    E3 --> X
+    S5 -->|"工具执行结果字符串"| M8
