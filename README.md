@@ -55,4 +55,40 @@ Copy-Item Agent/Stella/core/config.example.ini Agent/Stella/core/config.ini
 ```
 
 不要提交真实 API Key。
-" 
+
+### Stella 功能
+
+- 多轮对话与流式响应
+- `searchWeb`：调用千帆智能搜索获取实时信息与参考来源
+- `fetchWeb`：抓取网页并提取主要正文为 Markdown
+- `RunCli`：以当前用户权限执行本地命令行程序
+- 本地文件与目录操作工具
+
+## 环境要求
+
+- Windows 或其他支持 Python 的操作系统
+- Python 3.10 及以上
+- 可用的 LLM API Key
+- 千帆搜索 API Key（使用联网搜索时）
+- 本机已安装 `curl`
+
+安装依赖：
+
+```powershell
+python -m pip install -r Agent/Stella/tui/requirements.txt
+```
+
+## 安全提交说明
+
+提交作业前，请确认以下敏感文件未被 Git 跟踪或提交：
+
+- `Agent/Stella/core/config.ini`
+- 任何包含真实 API Key 的配置或日志文件
+
+可通过以下命令检查：
+
+```powershell
+git status
+git check-ignore -v Agent/Stella/core/config.ini
+```
+
