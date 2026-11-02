@@ -38,6 +38,8 @@ class StellaTUI(App[None]):
         super().__init__()
         self._session = session
         self._transcript = "Stella 已就绪。输入消息开始对话。\n"
+        if session.mcp_status:
+            self._transcript += f"\n{session.mcp_status}\n"
         self._assistant_reply = ""
 
     def compose(self) -> ComposeResult:

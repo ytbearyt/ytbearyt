@@ -1,7 +1,10 @@
 import json
+from types import SimpleNamespace
 import urllib.error
 
 from Agent.Stella.core import tools
+from Agent.Stella.core.skills import discover_skills
+from Agent.Stella.core.mcp_client import _exposed_tool_name, _format_tool_result
 
 
 def test_baidu_web_search_empty_config():
@@ -109,6 +112,124 @@ def test_search_web_formats_summary_and_references(monkeypatch):
     assert "搜索摘要：\n智能搜索摘要" in result
     assert "[官方页面](https://example.com)" in result
     assert "来源摘要" in result
+
+
+def test_load_skill_reads_skill_body_and_additional_file(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo\ndescription: Demo skill\n---\n完整 Skill 说明", encoding="utf-8")
+    (skill_dir / "references" / "guide.md").write_text("附加文件内容", encoding="utf-8")
+    skills = discover_skills(tmp_path)
+
+    assert tools.execute_tool("loadSkill", {"name": "demo"}, skills).endswith("完整 Skill 说明")
+    assert tools.execute_tool("loadSkill", {"name": "demo", "filename": "references/guide.md"}, skills) == "附加文件内容"
+    assert tools.execute_tool("loadSkill", {"name": "demo", "filename": ".agents/skills/demo/references/guide.md"}, skills) == "附加文件内容"
+
+
+def test_load_skill_returns_unique_filename_match(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
+    (skill_dir / "nested").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo\ndescription: Demo skill\n---\n说明", encoding="utf-8")
+    (skill_dir / "nested" / "guide.md").write_text("唯一文件", encoding="utf-8")
+    skills = discover_skills(tmp_path)
+
+    result = tools.execute_tool("loadSkill", {"name": "demo", "filename": "guide.md"}, skills)
+
+    assert result == "唯一文件"
+
+
+def test_load_skill_rejects_files_outside_skill_directory(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo\ndescription: Demo skill\n---\n说明", encoding="utf-8")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("不能读取", encoding="utf-8")
+    skills = discover_skills(tmp_path)
+
+    result = tools.execute_tool("loadSkill", {"name": "demo", "filename": "../../../secret.txt"}, skills)
+
+    assert "Skill 目录内" in result
+
+
+def test_create_skill_writes_valid_skill_and_refreshes_mapping(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    skills = {}
+    content = "---\nname: meeting-notes\ndescription: Organize meeting notes\n---\n\n# Meeting Notes\n"
+
+    result = tools.execute_tool("createSkill", {"name": "meeting-notes", "skillContext": content}, skills)
+
+    assert "已创建 Skill" in result
+    assert (tmp_path / ".agents" / "skills" / "meeting-notes" / "SKILL.md").read_text(encoding="utf-8") == content
+    assert skills["meeting-notes"].description == "Organize meeting notes"
+
+
+def test_create_skill_rejects_duplicate_without_overwriting(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    original = "---\nname: demo\ndescription: Original\n---\nOriginal body\n"
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(original, encoding="utf-8")
+
+    result = tools.execute_tool(
+        "createSkill",
+        {"name": "demo", "skillContext": "---\nname: demo\ndescription: New\n---\nNew body\n"},
+    )
+
+    assert "已存在" in result
+    assert skill_file.read_text(encoding="utf-8") == original
+
+
+def test_create_skill_requires_slug_and_matching_frontmatter(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    invalid_name = tools.execute_tool(
+        "createSkill",
+        {"name": "Meeting Notes", "skillContext": "---\nname: Meeting Notes\ndescription: Notes\n---\n正文"},
+    )
+    mismatched_name = tools.execute_tool(
+        "createSkill",
+        {"name": "meeting-notes", "skillContext": "---\nname: other\ndescription: Notes\n---\n正文"},
+    )
+
+    assert "名称必须只包含" in invalid_name
+    assert "name 必须与参数 name 一致" in mismatched_name
+
+
+def test_execute_tool_dispatches_mcp_tool_without_affecting_local_tools():
+    class FakeMCP:
+        def has_tool(self, name):
+            return name == "mcp__pet-hospital__list_pets"
+
+        def execute(self, name, arguments):
+            return f"called {name}: {arguments['page']}"
+
+    result = tools.execute_tool(
+        "mcp__pet-hospital__list_pets",
+        {"page": 2},
+        mcp_manager=FakeMCP(),
+    )
+
+    assert result == "called mcp__pet-hospital__list_pets: 2"
+    assert "当前工作目录" in tools.execute_tool("getCurrentDir", {}, mcp_manager=FakeMCP())
+
+
+def test_mcp_tool_names_are_prefixed_and_results_preserve_data_and_errors():
+    assert _exposed_tool_name("pet-hospital", "list_pets") == "mcp__pet-hospital__list_pets"
+    success = _format_tool_result(SimpleNamespace(
+        isError=False,
+        structuredContent={"count": 2},
+        content=[SimpleNamespace(type="text", text="查询完成")],
+    ))
+    failure = _format_tool_result(SimpleNamespace(
+        isError=True,
+        structuredContent=None,
+        content=[SimpleNamespace(type="text", text="后端不可用")],
+    ))
+
+    assert '"count": 2' in success
+    assert "查询完成" in success
+    assert "MCP 工具返回错误" in failure
 
 
 def test_baidu_web_search_api_error(monkeypatch):

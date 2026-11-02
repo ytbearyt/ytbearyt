@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import Settings
+from .skills import SkillMetadata, create_skill, discover_skills, load_skill
 
 
 MAX_READ_CHARS = 20000
@@ -56,6 +57,27 @@ def _function_tool(name: str, description: str, properties=None, required=None) 
 TOOLS = [
     _function_tool("getDate", "获取当前电脑的日期和时间，通过调用本地 date 命令实现"),
     _function_tool("getCurrentDir", "获取当前工作目录"),
+    _function_tool(
+        "loadSkill",
+        "加载指定 Skill 的完整说明或其 Skill 目录内的附加文件",
+        {
+            "name": {"type": "string", "description": "要加载的 Skill 名称"},
+            "filename": {
+                "type": "string",
+                "description": "可选：Skill 目录内的相对路径、项目相对路径或绝对路径；仅文件名可递归匹配",
+            },
+        },
+        ["name"],
+    ),
+    _function_tool(
+        "createSkill",
+        "根据完整的 Skill.md 内容创建新的项目 Skill；成功后当前会话会立即发现该 Skill",
+        {
+            "name": {"type": "string", "description": "Skill 名称，只能使用小写字母、数字和连字符"},
+            "skillContext": {"type": "string", "description": "要写入 SKILL.md 的完整内容，必须包含 YAML Frontmatter、name 和 description"},
+        },
+        ["name", "skillContext"],
+    ),
     _function_tool("searchWeb", "查找官网、最新公开信息或需要联网核实的网页；涉及实时信息、网站地址或搜索时优先调用此工具", {"query": {"type": "string", "description": "搜索关键词、机构名称或需要查找的公开信息"}}, ["query"]),
     _function_tool("fetchWeb", "获取指定网页的主要正文并转换为 Markdown", {"url": {"type": "string", "description": "要读取的网页 URL，仅支持 http 或 https"}}, ["url"]),
     _function_tool(
@@ -486,7 +508,22 @@ HANDLERS = {
 }
 
 
-def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    skills: dict[str, SkillMetadata] | None = None,
+    mcp_manager: Any | None = None,
+) -> str:
+    if name == "loadSkill":
+        return load_skill(arguments.get("name", ""), arguments.get("filename", ""), skills)
+    if mcp_manager is not None and mcp_manager.has_tool(name):
+        return mcp_manager.execute(name, arguments)
+    if name == "createSkill":
+        result = create_skill(arguments.get("name", ""), arguments.get("skillContext", ""))
+        if result.startswith("已创建 Skill：") and skills is not None:
+            skills.clear()
+            skills.update(discover_skills())
+        return result
     handler = HANDLERS.get(name)
     if handler is None:
         return f"未知的工具: {name}"

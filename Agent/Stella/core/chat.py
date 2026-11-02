@@ -1,13 +1,16 @@
 """Conversation orchestration and streaming model integration."""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
 
 from .config import Settings
 from .events import ChatEvent
+from .mcp_client import MCPClientManager
+from .skills import SkillMetadata, discover_skills
 from .tools import TOOLS, execute_tool
 
 
@@ -19,6 +22,22 @@ SYSTEM_PROMPT = (
 )
 
 
+def build_system_prompt(skills: Mapping[str, SkillMetadata], mcp_status: str = "") -> str:
+    skill_lines = [
+        f"- {skill.name}: {skill.description}"
+        for skill in skills.values()
+    ]
+    available_skills = "\n".join(skill_lines) or "- No skills are currently available."
+    prompt = (
+        f"{SYSTEM_PROMPT}\n\n"
+        "You have access to the following skills:\n"
+        f"{available_skills}\n"
+        "Use the `loadSkill` tool to load the full instructions of a skill when needed. "
+        "You can also load additional files referenced by a skill."
+    )
+    return f"{prompt}\n\n{mcp_status}" if mcp_status else prompt
+
+
 class ChatSession:
     """A conversation session with no dependency on a particular UI."""
 
@@ -26,10 +45,22 @@ class ChatSession:
         self._settings = settings
         self._client = client or OpenAI(base_url=settings.base_url, api_key=settings.api_key)
         self._history: list[dict[str, Any]] = []
+        self._skills: dict[str, SkillMetadata] = dict(discover_skills())
+        self._mcp = MCPClientManager.from_project(Path.cwd())
+        self._tools = [*TOOLS, *self._mcp.openai_tools]
+        self._system_prompt = build_system_prompt(self._skills, self._mcp.status)
+
+    @property
+    def skills(self) -> dict[str, SkillMetadata]:
+        return self._skills.copy()
+
+    @property
+    def mcp_status(self) -> str:
+        return self._mcp.status
 
     def send(self, prompt: str) -> Iterator[ChatEvent]:
         if not self._history:
-            self._history.append({"role": "system", "content": SYSTEM_PROMPT})
+            self._history.append({"role": "system", "content": self._system_prompt})
         self._history.append({"role": "user", "content": prompt})
         try:
             while True:
@@ -60,7 +91,11 @@ class ChatSession:
                     except json.JSONDecodeError:
                         arguments = {}
                     yield ChatEvent("tool_start", content=str(arguments), tool_name=name)
-                    result = execute_tool(name, arguments)
+                    result = execute_tool(name, arguments, self._skills, self._mcp)
+                    if name == "createSkill" and result.startswith("已创建 Skill："):
+                        self._system_prompt = build_system_prompt(self._skills)
+                        if self._history and self._history[0].get("role") == "system":
+                            self._history[0]["content"] = self._system_prompt
                     yield ChatEvent("tool_result", content=result, tool_name=name)
                     self._history.append(
                         {
@@ -78,7 +113,7 @@ class ChatSession:
         stream = self._client.chat.completions.create(
             model=self._settings.model,
             messages=self._history,
-            tools=TOOLS,
+            tools=self._tools,
             stream=True,
         )
         reply_parts: list[str] = []

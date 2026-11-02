@@ -1,3 +1,6 @@
 openai>=1.0.0
 textual>=0.80.0
 trafilatura>=2.0.0
+PyYAML>=6.0
+mcp==2.0.0
+httpx2>=2.0.0
