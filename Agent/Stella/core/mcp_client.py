@@ -103,7 +103,7 @@ class MCPClientManager:
         if exposed_name in self._bindings:
             self.errors.append(f"MCP 工具名称冲突，已跳过：{exposed_name}")
             return
-        schema = getattr(tool, "inputSchema", None)
+        schema = getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None)
         if not isinstance(schema, dict) or schema.get("type") != "object":
             schema = {"type": "object", "properties": {}}
         self._bindings[exposed_name] = (server, tool_name)
