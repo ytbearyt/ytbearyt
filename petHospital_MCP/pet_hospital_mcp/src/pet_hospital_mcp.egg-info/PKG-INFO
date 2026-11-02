@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: pet-hospital-mcp
+Version: 0.2.0
+Summary: MCP adapter for the Pet Hospital REST API
+Requires-Python: >=3.11
+Requires-Dist: mcp==2.0.0
+Requires-Dist: httpx<1,>=0.27
+Requires-Dist: pydantic<3,>=2.7
+Requires-Dist: uvicorn<1,>=0.30
+Provides-Extra: test
+Requires-Dist: pytest>=8; extra == "test"
+Requires-Dist: pytest-asyncio>=0.23; extra == "test"
