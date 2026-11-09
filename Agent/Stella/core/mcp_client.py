@@ -25,6 +25,7 @@ class MCPClientManager:
         self._bindings: dict[str, tuple[MCPServerConfig, str]] = {}
         self._openai_tools: list[dict[str, Any]] = []
         self.errors: list[str] = []
+        self._connected: set[str] = set()
 
     @classmethod
     def from_project(cls, project_root: Path | None = None) -> "MCPClientManager":
@@ -47,7 +48,6 @@ class MCPClientManager:
             manager.errors.append(f"无法读取 MCP 配置 {config_path}：{exc}")
             return manager
 
-        manager._discover_all()
         return manager
 
     @property
@@ -60,8 +60,26 @@ class MCPClientManager:
             return ""
         return "MCP 连接提示：\n" + "\n".join(f"- {error}" for error in self.errors)
 
+    @property
+    def server_summaries(self) -> list[dict[str, Any]]:
+        summaries = []
+        for server in self._servers.values():
+            tools = [tool_name for bound_server, tool_name in self._bindings.values() if bound_server.name == server.name]
+            errors = [error for error in self.errors if f"Server {server.name}" in error]
+            summaries.append({
+                "name": server.name,
+                "url": server.url,
+                "connected": server.name in self._connected,
+                "tools": sorted(tools),
+                "error": errors[0] if errors else "",
+            })
+        return summaries
+
     def has_tool(self, exposed_name: str) -> bool:
         return exposed_name in self._bindings
+
+    def discover(self) -> None:
+        self._discover_all()
 
     def execute(self, exposed_name: str, arguments: dict[str, Any]) -> str:
         binding = self._bindings.get(exposed_name)
@@ -87,9 +105,13 @@ class MCPClientManager:
         self._servers[name.strip()] = MCPServerConfig(name=name.strip(), url=url.strip(), headers=headers)
 
     def _discover_all(self) -> None:
+        self._bindings.clear()
+        self._openai_tools.clear()
+        self._connected.clear()
         for server in self._servers.values():
             try:
                 tools = _run_async(self._list_tools(server))
+                self._connected.add(server.name)
                 for tool in tools:
                     self._register_tool(server, tool)
             except Exception as exc:

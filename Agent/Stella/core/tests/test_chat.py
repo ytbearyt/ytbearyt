@@ -65,6 +65,18 @@ class CreateSkillClient:
         return iter(self.responses.pop(0))
 
 
+class CompactClient:
+    def __init__(self):
+        self.requests = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.requests.append(kwargs)
+        if kwargs.get("stream") is False:
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="# 工作摘要\n关键事实"))])
+        return iter([_chunk(content="收到")])
+
+
 def test_chat_session_streams_tokens_and_completes_tool_cycle():
     session = ChatSession(
         Settings(base_url="https://example.invalid", api_key="test", model="test-model"),
@@ -160,3 +172,71 @@ def test_create_skill_refreshes_current_session_prompt(tmp_path, monkeypatch):
     assert any(event.kind == "tool_result" and "已创建 Skill" in event.content for event in events)
     assert session.skills["focus"].description == "Improve focus"
     assert "- focus: Improve focus" in session._history[0]["content"]
+
+
+def test_compact_archives_history_and_replaces_it_without_tools(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client = CompactClient()
+    session = ChatSession(
+        Settings(base_url="https://example.invalid", api_key="test", model="test-model"),
+        client=client,
+    )
+    list(session.send("记住迁移方案"))
+
+    events = list(session.compact())
+
+    archive_files = list((tmp_path / ".agents" / "context").glob("*.jsonl"))
+    assert len(archive_files) == 1
+    assert "迁移方案" in archive_files[0].read_text(encoding="utf-8")
+    assert any(event.kind == "compact" and "完成" in event.content for event in events)
+    assert "工作摘要" in session._history[1]["content"]
+    compact_request = client.requests[-1]
+    assert compact_request["tools"] == []
+    assert "recallContext" in session._history[1]["content"]
+
+
+def test_context_threshold_blocks_new_prompt_until_compact(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    session = ChatSession(
+        Settings(base_url="https://example.invalid", api_key="test", model="test-model", context_window=1),
+        client=CompactClient(),
+    )
+
+    events = list(session.send("任何内容"))
+
+    assert any(event.kind == "context_warning" for event in events)
+    blocked = list(session.send("不应继续"))
+    assert blocked[0].kind == "context_warning"
+
+
+def test_agents_file_is_injected_once_and_persisted(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("必须使用中文回答。", encoding="utf-8")
+    session = ChatSession(
+        Settings(base_url="https://example.invalid", api_key="test", model="test-model"),
+        client=CompactClient(),
+    )
+
+    assert session.history[1]["role"] == "system"
+    assert "必须使用中文回答" in session.history[1]["content"]
+    saved = list((tmp_path / ".agents" / "sessions").glob("*.jsonl"))
+    assert len(saved) == 1
+    assert "AGENTS.md" in saved[0].read_text(encoding="utf-8")
+
+
+def test_session_save_new_and_resume(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client = CompactClient()
+    session = ChatSession(
+        Settings(base_url="https://example.invalid", api_key="test", model="test-model"),
+        client=client,
+    )
+    first_id = session.session_id
+    list(session.send("保存这条消息"))
+    session.save()
+    new_id = session.new_session()
+
+    assert new_id != first_id
+    assert any(item.session_id == first_id for item in session.list_sessions())
+    session.resume_session(first_id)
+    assert any(message.get("content") == "保存这条消息" for message in session.history)

@@ -10,10 +10,12 @@ import urllib.error
 import urllib.request
 import subprocess
 import sys
+from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import urlparse
 
-from .config import Settings
+from .config import PROJECT_ROOT, Settings
 from .skills import SkillMetadata, create_skill, discover_skills, load_skill
 
 
@@ -55,6 +57,15 @@ def _function_tool(name: str, description: str, properties=None, required=None) 
 
 
 TOOLS = [
+    _function_tool(
+        "recallContext",
+        "检索 .agents/context/ 中已经归档的历史上下文原始消息；需要补回压缩摘要遗漏的细节时使用",
+        {
+            "id": {"type": "string", "description": "可选的归档编号，例如 20261022-153000"},
+            "text": {"type": "string", "description": "必需的关键词或文本内容"},
+        },
+        ["text"],
+    ),
     _function_tool("getDate", "获取当前电脑的日期和时间，通过调用本地 date 命令实现"),
     _function_tool("getCurrentDir", "获取当前工作目录"),
     _function_tool(
@@ -131,6 +142,60 @@ TOOLS = [
 ]
 
 
+CONTEXT_RESULT_MAX_CHARS = 8000
+WEB_TIMEOUT_SECONDS = 35
+
+
+def configure_tools(settings: Settings) -> None:
+    """Apply user-configured limits while retaining module defaults."""
+    global MAX_READ_CHARS, MAX_READ_BYTES, CLI_OUTPUT_MAX_CHARS, CLI_TIMEOUT_SECONDS
+    global CONTEXT_RESULT_MAX_CHARS, WEB_TIMEOUT_SECONDS
+    MAX_READ_CHARS = settings.max_read_chars
+    MAX_READ_BYTES = settings.max_read_bytes
+    CLI_OUTPUT_MAX_CHARS = settings.cli_output_max_chars
+    CLI_TIMEOUT_SECONDS = settings.cli_timeout_seconds
+    CONTEXT_RESULT_MAX_CHARS = settings.context_result_max_chars
+    WEB_TIMEOUT_SECONDS = settings.web_timeout_seconds
+
+
+def recall_context(archive_id: str = "", text: str = "") -> str:
+    query = text.strip()
+    if not query:
+        return "错误：text 不能为空"
+    context_dir = Path.cwd() / ".agents" / "context"
+    if not context_dir.is_dir():
+        return "未找到历史上下文归档。"
+    files = [context_dir / f"{archive_id}.jsonl"] if archive_id else sorted(context_dir.glob("*.jsonl"), reverse=True)
+    terms = [term for term in re.split(r"[\s,，。；;、|]+", query) if term]
+    matches: list[tuple[int, str]] = []
+    for path in files:
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line_number, line in enumerate(lines, 1):
+            if not line:
+                continue
+            haystack = line.casefold()
+            score = sum(term.casefold() in haystack for term in terms)
+            if score:
+                try:
+                    message = json.loads(line)
+                    content = json.dumps(message, ensure_ascii=False, indent=2)
+                except json.JSONDecodeError:
+                    content = line
+                matches.append((score, f"归档：{path.stem}，第 {line_number} 条消息\n{content}"))
+    matches.sort(key=lambda item: item[0], reverse=True)
+    if not matches:
+        return f"未找到与「{query}」匹配的历史内容。"
+    output = "\n\n".join(item[1] for item in matches)
+    if len(output) > CONTEXT_RESULT_MAX_CHARS:
+        output = output[:CONTEXT_RESULT_MAX_CHARS] + "\n[结果已截断]"
+    return output
+
+
 def _detect_encoding(data: bytes) -> str | None:
     for encoding in DECODE_ENCODINGS:
         try:
@@ -141,7 +206,8 @@ def _detect_encoding(data: bytes) -> str | None:
     return None
 
 
-def _read_bytes(path: str, limit: int = MAX_READ_BYTES) -> bytes:
+def _read_bytes(path: str, limit: int | None = None) -> bytes:
+    limit = limit or MAX_READ_BYTES
     with open(path, "rb") as file:
         data = file.read(limit)
     return data[:-4] if len(data) == limit else data
@@ -324,7 +390,7 @@ def baidu_web_search(query: str, api_key: str = "") -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=WEB_TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -379,7 +445,7 @@ def fetch_web(url: str) -> str:
         "--silent",
         "--show-error",
         "--max-time",
-        "30",
+        str(WEB_TIMEOUT_SECONDS),
         "--connect-timeout",
         "10",
         "--user-agent",
@@ -393,11 +459,11 @@ def fetch_web(url: str) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=35,
+            timeout=WEB_TIMEOUT_SECONDS,
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return "错误：网页访问超时（35 秒）"
+        return f"错误：网页访问超时（{WEB_TIMEOUT_SECONDS} 秒）"
     except FileNotFoundError:
         return "错误：本机未找到 curl 程序，无法获取网页"
     except OSError as exc:
@@ -434,7 +500,14 @@ def fetch_web(url: str) -> str:
 
 def _baidu_web_search(arguments: dict[str, Any]) -> str:
     try:
-        api_key = Settings.load().baidu_qianfan_api_key
+        settings = Settings.load()
+        if settings.configuration_required or not settings.baidu_qianfan_api_key:
+            legacy_path = PROJECT_ROOT / "core" / "config.ini"
+            if legacy_path.is_file():
+                legacy_settings = Settings.load(legacy_path)
+                if legacy_settings.baidu_qianfan_api_key:
+                    settings = legacy_settings
+        api_key = settings.baidu_qianfan_api_key
     except (FileNotFoundError, configparser.Error, ValueError) as exc:
         return f"错误：无法加载千帆搜索配置：{exc}"
     return baidu_web_search(arguments["query"], api_key)
@@ -490,6 +563,7 @@ def run_cli(command: str, args: list[str]) -> str:
 
 
 HANDLERS = {
+    "recallContext": lambda arguments: recall_context(arguments.get("id", ""), arguments.get("text", "")),
     "getDate": lambda _: get_date(),
     "getCurrentDir": lambda _: get_current_dir(),
     "searchWeb": _baidu_web_search,

@@ -247,3 +247,20 @@ def test_baidu_web_search_api_error(monkeypatch):
     result = tools.baidu_web_search("天气", "test-key")
     assert "千帆搜索 API 返回失败" in result
     assert "invalid api key" in result
+
+
+def test_recall_context_searches_archives_and_reports_source(tmp_path, monkeypatch):
+    context_dir = tmp_path / ".agents" / "context"
+    context_dir.mkdir(parents=True)
+    (context_dir / "20261022-153000.jsonl").write_text(
+        '{"role":"user","content":"保留数据库迁移方案"}\n'
+        '{"role":"tool","tool_call_id":"call-1","content":"迁移已完成"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = tools.execute_tool("recallContext", {"text": "数据库"})
+
+    assert "归档：20261022-153000" in result
+    assert "数据库迁移方案" in result
+    assert "第 1 条消息" in result
